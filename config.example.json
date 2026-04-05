@@ -1,0 +1,9 @@
+{
+  "asc": {
+    "vendorNumber": "YOUR_VENDOR_NUMBER"
+  },
+  "postBridge": {
+    "apiKey": "YOUR_POST_BRIDGE_API_KEY",
+    "defaultAccountId": null
+  }
+}

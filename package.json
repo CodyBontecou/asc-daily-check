@@ -1,0 +1,13 @@
+{
+  "name": "asc-daily-check",
+  "version": "1.0.0",
+  "description": "Daily App Store Connect sales checker with tweet generation",
+  "type": "module",
+  "scripts": {
+    "check": "node daily-sales.js",
+    "check:yesterday": "node daily-sales.js --date yesterday",
+    "check:date": "node daily-sales.js --date"
+  },
+  "author": "Cody Bontecou",
+  "license": "MIT"
+}

@@ -1,0 +1,21 @@
+# Config contains API keys
+config.json
+
+# Personal launchd plist (use .example as template)
+com.bontecou.asc-daily-check.plist
+
+# Node
+node_modules/
+
+# Sales reports (temporary)
+*.tsv
+*.tsv.gz
+
+# Logs
+*.log
+
+# macOS
+.DS_Store
+
+# Pi agent files
+.pi/
