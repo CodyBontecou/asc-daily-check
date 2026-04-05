@@ -1,13 +1,19 @@
-name: Monthly Sales Check
+name: Monthly Sales Report
 
 on:
   schedule:
-    # 8:10 AM PST on the 1st of every month = 16:10 UTC
-    - cron: '10 16 1 * *'
-  workflow_dispatch: # Allow manual trigger
+    # 8:10 AM PST on the 2nd of every month = 16:10 UTC
+    # (2nd to ensure all data from previous month is available)
+    - cron: '10 16 2 * *'
+  workflow_dispatch:
+    inputs:
+      month:
+        description: 'Month to report (YYYY-MM or "last")'
+        required: false
+        default: 'last'
 
 jobs:
-  check-sales:
+  monthly-report:
     runs-on: macos-latest
     
     steps:
@@ -47,8 +53,35 @@ jobs:
           }
           EOF
 
-      - name: Run sales check and post to social platforms
+      - name: Generate monthly report
+        id: report
         run: |
-          npm run check:yesterday -- --post --account ${{ secrets.POST_BRIDGE_ACCOUNT_IDS }}
+          MONTH="${{ github.event.inputs.month || 'last' }}"
+          echo "Generating report for month: $MONTH"
+          
+          # Generate JSON report
+          node daily-sales.js --month "$MONTH" --json > monthly-report.json 2>fetch.log
+          cat fetch.log
+          
+          # Output summary
+          echo "## Monthly Report" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          cat monthly-report.json >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
         env:
           ASC_VENDOR_NUMBER: ${{ secrets.ASC_VENDOR_NUMBER }}
+
+      - name: Post to social platforms
+        if: success()
+        run: |
+          MONTH="${{ github.event.inputs.month || 'last' }}"
+          node daily-sales.js --month "$MONTH" --post --account ${{ secrets.POST_BRIDGE_ACCOUNT_IDS }}
+        env:
+          ASC_VENDOR_NUMBER: ${{ secrets.ASC_VENDOR_NUMBER }}
+
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: monthly-report
+          path: monthly-report.json
+          retention-days: 90

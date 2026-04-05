@@ -25,6 +25,57 @@ function saveConfig(config) {
 const config = loadConfig();
 const VENDOR_NUMBER = process.env.ASC_VENDOR_NUMBER || config.asc?.vendorNumber || "92465427";
 
+// Approximate exchange rates to USD (update periodically)
+const USD_RATES = {
+  USD: 1.0,
+  EUR: 1.08,
+  GBP: 1.27,
+  JPY: 0.0067,
+  CNY: 0.14,
+  AUD: 0.65,
+  CAD: 0.74,
+  CHF: 1.13,
+  KRW: 0.00075,
+  BRL: 0.20,
+  MXN: 0.058,
+  RUB: 0.011,
+  INR: 0.012,
+  TWD: 0.031,
+  HKD: 0.13,
+  SGD: 0.75,
+  NZD: 0.61,
+  SEK: 0.095,
+  NOK: 0.093,
+  DKK: 0.145,
+  PLN: 0.25,
+  CZK: 0.043,
+  ILS: 0.27,
+  KZT: 0.0022,
+  RON: 0.22,
+  ZAR: 0.055,
+  TRY: 0.031,
+  THB: 0.029,
+  PHP: 0.018,
+  IDR: 0.000063,
+  MYR: 0.22,
+  VND: 0.00004,
+  CLP: 0.001,
+  COP: 0.00024,
+  PEN: 0.27,
+  ARS: 0.001,
+  EGP: 0.02,
+  PKR: 0.0036,
+  BGN: 0.55,
+  HRK: 0.14,
+  HUF: 0.0027,
+  SAR: 0.27,
+  AED: 0.27,
+  QAR: 0.27,
+  KWD: 3.25,
+  OMR: 2.60,
+  BHD: 2.65,
+};
+
 // Product type codes from Apple
 const PRODUCT_TYPES = {
   "1": "Free or Paid App (Universal)",
@@ -60,6 +111,46 @@ function parseDate(dateArg) {
     return dateArg;
   }
   throw new Error(`Invalid date format: ${dateArg}. Use YYYY-MM-DD`);
+}
+
+function parseMonth(monthArg) {
+  // Handle "last" for previous month
+  if (monthArg === "last") {
+    const d = new Date();
+    d.setMonth(d.getMonth() - 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  }
+  // Validate YYYY-MM format
+  if (/^\d{4}-\d{2}$/.test(monthArg)) {
+    return monthArg;
+  }
+  throw new Error(`Invalid month format: ${monthArg}. Use YYYY-MM or "last"`);
+}
+
+function getDatesInMonth(yearMonth) {
+  const [year, month] = yearMonth.split("-").map(Number);
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const dates = [];
+  for (let d = 1; d <= daysInMonth; d++) {
+    dates.push(`${year}-${String(month).padStart(2, "0")}-${String(d).padStart(2, "0")}`);
+  }
+  return dates;
+}
+
+function convertToUSD(amount, currency) {
+  const rate = USD_RATES[currency] || 1.0;
+  return amount * rate;
+}
+
+function getParentAppName(sku) {
+  // Map SKUs to parent app names
+  if (sku.includes("obsidianhealth")) return "Health.md";
+  if (sku.includes("Sync-md")) return "Sync.md";
+  if (sku.includes("Voxboard")) return "Voxboard";
+  if (sku.includes("InstaReply")) return "Instarep.ly";
+  if (sku.includes("imghost")) return "imghost";
+  if (sku.includes("PocketREPL")) return "PocketREPL";
+  return null;
 }
 
 function fetchSalesData(date) {
@@ -334,10 +425,172 @@ function generateJSON(date, stats) {
   };
 }
 
+// Monthly aggregation with USD conversion
+async function fetchMonthlyData(yearMonth) {
+  const dates = getDatesInMonth(yearMonth);
+  const appStats = {};
+  const countryStats = {};
+  let totalDownloads = 0;
+  let totalRevenueUSD = 0;
+  let totalUnitsSold = 0;
+  let daysWithData = 0;
+
+  console.error(`Fetching daily sales for ${yearMonth}...`);
+
+  for (const date of dates) {
+    process.stderr.write(`  ${date}...`);
+    const tsv = fetchSalesData(date);
+    
+    if (!tsv) {
+      console.error(" no data");
+      continue;
+    }
+    
+    daysWithData++;
+    const rows = parseTSV(tsv);
+    let dayDownloads = 0;
+    let dayRevenue = 0;
+    
+    for (const row of rows) {
+      let appName = row["Title"] || "Unknown";
+      const units = parseInt(row["Units"]) || 0;
+      const proceeds = parseFloat(row["Developer Proceeds"]) || 0;
+      const currency = row["Currency of Proceeds"] || "USD";
+      const productType = row["Product Type Identifier"] || "";
+      const sku = row["SKU"] || "";
+      const countryCode = row["Country Code"] || "??";
+      
+      // Attribute IAPs to parent app
+      const parentApp = getParentAppName(sku);
+      if (parentApp) appName = parentApp;
+      
+      if (!appStats[appName]) {
+        appStats[appName] = { downloads: 0, unitsSold: 0, revenueUSD: 0, countries: new Set() };
+      }
+      
+      const isIAP = productType.startsWith("IA");
+      const isNewDownload = ["1F", "1T", "1", "3F", "3T", "F1"].includes(productType);
+      
+      // Convert proceeds to USD
+      const proceedsUSD = convertToUSD(proceeds, currency);
+      
+      if (proceeds !== 0) {
+        appStats[appName].unitsSold += units;
+        appStats[appName].revenueUSD += proceedsUSD;
+        totalUnitsSold += units;
+        totalRevenueUSD += proceedsUSD;
+        dayRevenue += proceedsUSD;
+      }
+      
+      if (isNewDownload) {
+        appStats[appName].downloads += units;
+        totalDownloads += units;
+        dayDownloads += units;
+        appStats[appName].countries.add(countryCode);
+        
+        // Track country downloads
+        if (!countryStats[countryCode]) countryStats[countryCode] = 0;
+        countryStats[countryCode] += units;
+      }
+    }
+    
+    console.error(` ${dayDownloads} downloads, $${dayRevenue.toFixed(2)}`);
+  }
+
+  // Convert country Sets to counts
+  Object.keys(appStats).forEach((app) => {
+    appStats[app].countryCount = appStats[app].countries.size;
+    delete appStats[app].countries;
+  });
+
+  // Sort countries by downloads
+  const topCountries = Object.entries(countryStats)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10);
+
+  return {
+    month: yearMonth,
+    daysWithData,
+    apps: appStats,
+    topCountries,
+    totalDownloads,
+    totalUnitsSold,
+    totalRevenueUSD,
+  };
+}
+
+function generateMonthlyTweet(stats) {
+  const { month, apps, totalDownloads, totalRevenueUSD } = stats;
+  
+  // Format month nicely
+  const [year, monthNum] = month.split("-");
+  const monthName = new Date(year, monthNum - 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
+
+  // Filter to apps with downloads or revenue
+  const appEntries = Object.entries(apps)
+    .filter(([_, data]) => data.downloads > 0 || data.revenueUSD > 0)
+    .sort((a, b) => b[1].revenueUSD - a[1].revenueUSD || b[1].downloads - a[1].downloads);
+
+  if (totalDownloads === 0 && totalRevenueUSD === 0) {
+    return `${monthName} App Store recap — No sales data.`;
+  }
+
+  // Header
+  let tweet = `${monthName} App Store recap:\n\n`;
+  
+  if (totalRevenueUSD > 0) {
+    tweet = `I made ${formatCurrency(totalRevenueUSD)} in ${monthName}.\n\n`;
+  }
+
+  // App breakdown
+  const appLines = appEntries.map(([name, data]) => {
+    const emoji = APP_EMOJIS[name] || "📱";
+    const safeName = sanitizeForTwitter(name);
+    let line = `${emoji} ${safeName} — ${data.downloads} downloads`;
+    if (data.revenueUSD > 0) {
+      line += ` (${formatCurrency(data.revenueUSD)})`;
+    }
+    return line;
+  });
+
+  tweet += appLines.join("\n");
+
+  return tweet;
+}
+
+function generateMonthlyJSON(stats) {
+  return {
+    month: stats.month,
+    generatedAt: new Date().toISOString(),
+    daysWithData: stats.daysWithData,
+    summary: {
+      totalDownloads: stats.totalDownloads,
+      totalUnitsSold: stats.totalUnitsSold,
+      totalRevenueUSD: Math.round(stats.totalRevenueUSD * 100) / 100,
+    },
+    apps: Object.fromEntries(
+      Object.entries(stats.apps).map(([name, data]) => [
+        name,
+        {
+          downloads: data.downloads,
+          unitsSold: data.unitsSold,
+          revenueUSD: Math.round(data.revenueUSD * 100) / 100,
+          countryCount: data.countryCount,
+        },
+      ])
+    ),
+    topCountries: stats.topCountries.map(([code, count]) => ({
+      country: code,
+      downloads: count,
+    })),
+  };
+}
+
 // Main
 async function main() {
   const args = process.argv.slice(2);
   let date = getYesterday();
+  let month = null;
   let outputFormat = "tweet"; // tweet, json, or both
   let shouldPost = false;
   let accountIds = config.postBridge?.defaultAccountId 
@@ -351,6 +604,9 @@ async function main() {
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--date" && args[i + 1]) {
       date = parseDate(args[i + 1]);
+      i++;
+    } else if (args[i] === "--month" && args[i + 1]) {
+      month = parseMonth(args[i + 1]);
       i++;
     } else if (args[i] === "--json") {
       outputFormat = "json";
@@ -383,6 +639,29 @@ async function main() {
   // List accounts
   if (listAccounts) {
     await listConnectedAccounts();
+    return;
+  }
+
+  // Monthly mode
+  if (month) {
+    const stats = await fetchMonthlyData(month);
+    const tweet = generateMonthlyTweet(stats);
+
+    // Output
+    if (outputFormat === "json") {
+      console.log(JSON.stringify(generateMonthlyJSON(stats), null, 2));
+    } else if (outputFormat === "all") {
+      const data = generateMonthlyJSON(stats);
+      data.tweet = tweet;
+      console.log(JSON.stringify(data, null, 2));
+    } else {
+      console.log(tweet);
+    }
+
+    // Post if requested
+    if (shouldPost) {
+      await postToSocial(tweet, accountIds, isDraft);
+    }
     return;
   }
 
@@ -423,6 +702,8 @@ Usage: node daily-sales.js [options]
 
 Options:
   --date <YYYY-MM-DD>  Fetch sales for a specific date (default: yesterday)
+  --month <YYYY-MM>    Fetch and aggregate sales for an entire month
+                       Use "last" for previous month
   --json               Output as JSON
   --all                Output JSON with tweet included
   --post               Post to connected social accounts
@@ -435,6 +716,10 @@ Options:
 Examples:
   node daily-sales.js                          # Generate tweet for yesterday
   node daily-sales.js --date 2026-04-04        # Specific date
+  node daily-sales.js --month 2026-03          # March 2026 summary
+  node daily-sales.js --month last             # Previous month summary
+  node daily-sales.js --month last --json      # Monthly summary as JSON
+  node daily-sales.js --month last --post      # Post monthly summary
   node daily-sales.js --post                   # Generate and post
   node daily-sales.js --post --account 123     # Post to specific account
   node daily-sales.js --accounts               # List available accounts

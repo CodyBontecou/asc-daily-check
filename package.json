@@ -6,7 +6,9 @@
   "scripts": {
     "check": "node daily-sales.js",
     "check:yesterday": "node daily-sales.js --date yesterday",
-    "check:date": "node daily-sales.js --date"
+    "check:date": "node daily-sales.js --date",
+    "check:month": "node daily-sales.js --month",
+    "check:last-month": "node daily-sales.js --month last"
   },
   "author": "Cody Bontecou",
   "license": "MIT"
